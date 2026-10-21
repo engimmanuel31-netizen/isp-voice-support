@@ -5,6 +5,7 @@
 // Only dependency: `ws`. HTTP and static files use Node's built-in modules.
 import { createServer } from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -12,7 +13,14 @@ import { WebSocketServer } from 'ws';
 import { buildInstructions, FUNCTION_DECLARATIONS, LANGUAGES } from './prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PUBLIC_DIR = path.join(__dirname, 'public');
+// Web pages live in public/. If they were uploaded next to server.js instead (easy to do with
+// GitHub's web uploader), serve them from there, but only the page files listed here.
+const HAS_PUBLIC = existsSync(path.join(__dirname, 'public', 'index.html'));
+const PUBLIC_DIR = HAS_PUBLIC ? path.join(__dirname, 'public') : __dirname;
+const FLAT_ALLOWED = new Set([
+  'index.html', 'tech.html', 'booth.html', 'style.css',
+  'caller.js', 'tech.js', 'common.js', 'gemini-live.js'
+]);
 const GEMINI_WS =
   'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContentConstrained';
 const GEMINI_API = process.env.GEMINI_API_BASE || 'https://generativelanguage.googleapis.com'; // overridable for tests
@@ -81,6 +89,11 @@ async function serveStatic(req, res, pathname) {
   if (!path.extname(rel)) rel += '.html'; // /tech -> tech.html
   const file = path.normalize(path.join(PUBLIC_DIR, rel));
   if (!file.startsWith(PUBLIC_DIR + path.sep)) return json(res, 403, { error: 'forbidden' });
+  // flat layout: never serve server code, config or tests, only the page files
+  if (!HAS_PUBLIC && (path.dirname(file) !== PUBLIC_DIR || !FLAT_ALLOWED.has(path.basename(file)))) {
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    return res.end('Not found');
+  }
   try {
     const info = await stat(file);
     if (!info.isFile()) throw new Error('not file');
@@ -484,6 +497,7 @@ wss.on('close', () => clearInterval(heartbeat));
 
 server.listen(cfg.port, () => {
   console.log(`ISP voice support running on http://localhost:${cfg.port}`);
+  if (!HAS_PUBLIC) console.log('  (page files found next to server.js instead of in public/, serving them from there)');
   console.log(`  Caller page:      /`);
   console.log(`  Technician page:  /tech`);
   console.log(`  Booth QR screen:  /booth`);
