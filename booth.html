@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Booth Screen</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700;800&family=Noto+Sans+Devanagari:wght@600&family=Noto+Sans+Kannada:wght@600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script>window.QRCode || document.write('<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"><\/script>');</script>
+</head>
+<body>
+  <main class="booth">
+    <div>
+      <div class="brand" style="margin-bottom:28px"><div class="brand-mark"><span></span></div><span id="isp">NetConnect</span></div>
+      <h1>Internet trouble? Scan and talk to <span id="assistant">Asha</span>.</h1>
+      <p class="say">Free voice call from your phone browser. No app, no SIM.</p>
+      <p class="say muted" lang="hi">हिन्दी में बात करें</p>
+      <p class="say muted" lang="kn">ಕನ್ನಡದಲ್ಲಿ ಮಾತಾಡಿ</p>
+      <div class="steps-row">
+        <span class="led" data-c="green">Scan the code with your camera</span>
+        <span class="led" data-c="blue">Pick your language and tap call</span>
+        <span class="led" data-c="amber">Our technician joins if needed</span>
+      </div>
+    </div>
+    <div class="qr-card">
+      <div id="qr" role="img" aria-label="QR code to open the voice support page"></div>
+      <p id="url"></p>
+    </div>
+  </main>
+  <script>
+    const url = location.origin + '/';
+    document.getElementById('url').textContent = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+    if (window.QRCode) {
+      new QRCode(document.getElementById('qr'), { text: url, width: 512, height: 512, colorDark: '#1c2530', colorLight: '#ffffff', correctLevel: QRCode.CorrectLevel.M });
+    } else {
+      // no internet for the QR library: show the address big enough to type
+      const q = document.getElementById('qr');
+      q.style.cssText = 'display:grid;place-items:center;font-size:clamp(1.4rem,3vw,2.6rem);font-weight:800;word-break:break-all;padding:12px';
+      q.textContent = url.replace(/^https?:\/\//, '').replace(/\/$/, '');
+      document.getElementById('url').textContent = 'Type this address in your phone browser';
+    }
+    fetch('/api/config').then((r) => r.json()).then((c) => {
+      document.getElementById('isp').textContent = c.ispName;
+      document.getElementById('assistant').textContent = c.assistantName;
+      document.title = c.ispName + ' Booth';
+    }).catch(() => {});
+  </script>
+</body>
+</html>
