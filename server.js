@@ -206,20 +206,32 @@ async function createSession(req, res) {
   try {
     // One-use token: must start a session within 1 minute, expires in 30 minutes.
     const now = Date.now();
-    const r = await fetch(`${GEMINI_API}/v1beta/auth_tokens`, {
-      method: 'POST',
-      headers: { 'x-goog-api-key': cfg.geminiKey, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        uses: 1,
-        expireTime: new Date(now + 30 * 60_000).toISOString(),
-        newSessionExpireTime: new Date(now + 60_000).toISOString(),
-        liveConnectConstraints: {
-          model: `models/${cfg.model}`,
-          config: { responseModalities: ['AUDIO'] }
-        }
-      })
+    const base = {
+      uses: 1,
+      expireTime: new Date(now + 30 * 60_000).toISOString(),
+      newSessionExpireTime: new Date(now + 60_000).toISOString()
+    };
+    const requestToken = (body) =>
+      fetch(`${GEMINI_API}/v1beta/auth_tokens`, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': cfg.geminiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(async (r) => ({ r, data: await r.json().catch(() => ({})) }));
+
+    // First try a token locked to the Live model (REST name: bidiGenerateContentSetup).
+    // If Google rejects that field, fall back to a plain one-use token: it still expires
+    // in 1 minute if unused and can start only one session.
+    let { r, data } = await requestToken({
+      ...base,
+      bidiGenerateContentSetup: {
+        model: `models/${cfg.model}`,
+        generationConfig: { responseModalities: ['AUDIO'] }
+      }
     });
-    const data = await r.json().catch(() => ({}));
+    if (r.status === 400) {
+      console.warn('[gemini] locked token rejected, using a plain one-use token:', data?.error?.message);
+      ({ r, data } = await requestToken(base));
+    }
     if (!r.ok || !data.name) {
       console.error('[gemini] auth_tokens failed', r.status, data?.error?.message);
       return json(res, 502, { error: data?.error?.message || `Gemini returned ${r.status}` });
