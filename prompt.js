@@ -1,14 +1,24 @@
 // ISP voice assistant: system prompt, decision trees and tool definitions.
 // Edit ISP_NAME / ASSISTANT_NAME in .env to rebrand without touching code.
 
-export const LANGUAGES = {
-  en: { name: 'English', greeting: 'Hello! This is {assistant} from {isp} support. What problem are you facing with your internet today?' },
-  hi: { name: 'Hindi', greeting: 'नमस्ते! मैं {isp} सपोर्ट से {assistant} बोल रही हूँ। आज आपके इंटरनेट में क्या दिक्कत आ रही है?' },
-  kn: { name: 'Kannada', greeting: 'ನಮಸ್ಕಾರ! ನಾನು {isp} ಸಪೋರ್ಟ್‌ನಿಂದ {assistant}. ಇವತ್ತು ನಿಮ್ಮ ಇಂಟರ್ನೆಟ್‌ನಲ್ಲಿ ಏನು ಸಮಸ್ಯೆ ಆಗ್ತಿದೆ?' }
-};
+// Languages Nova offers by name at the start of the call. Callers may pick any other language too.
+export const OFFERED_LANGUAGES = ['English', 'Hindi', 'Kannada'];
 
 // Gemini Live function declarations (OpenAPI-style schema, upper-case types)
 export const FUNCTION_DECLARATIONS = [
+  {
+    name: 'set_language',
+    description:
+      'Record the language the caller chose for this call. Call it once, right after the caller says which language they want, ' +
+      'and again only if they ask to change language.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        language: { type: 'STRING', description: 'Language name in English, e.g. "English", "Hindi", "Kannada", "Tamil".' }
+      },
+      required: ['language']
+    }
+  },
   {
     name: 'escalate_to_technician',
     description:
@@ -62,17 +72,24 @@ export const FUNCTION_DECLARATIONS = [
   }
 ];
 
-export function buildInstructions({ lang = 'en', ispName = 'NetConnect', assistantName = 'Asha', resumeContext = '' } = {}) {
-  const language = LANGUAGES[lang] || LANGUAGES.en;
-  const greeting = language.greeting.replace('{assistant}', assistantName).replace('{isp}', ispName);
+export function buildInstructions({ ispName = 'NetConnect', assistantName = 'Nova', resumeContext = '' } = {}) {
+  const offered = `${OFFERED_LANGUAGES.slice(0, -1).join(', ')} or ${OFFERED_LANGUAGES.at(-1)}`;
+  const greeting = `Hello! This is ${assistantName} from ${ispName} support. Which language would you like to talk in: ${offered}?`;
 
   return `
 # Role
 You are ${assistantName}, the voice support assistant for ${ispName}, an Internet Service Provider in India. You are running at the ${ispName} booth at an exhibition. Visitors talk to you through their phone or laptop browser. You handle Level 1 home-internet troubleshooting and hand the call to the on-site human technician when needed.
 
+# Identity
+- Your name is ${assistantName}. If anyone asks your name or who you are, say you are ${assistantName}, the ${ispName} voice assistant.
+- Never say you are a language model, an LLM, Gemini or made by Google. If asked how you work, say you are ${ispName}'s AI support assistant.
+- Stay on ${ispName} internet support. If the caller asks about unrelated topics, answer in one short friendly line and steer back to their internet problem.
+
 # Language
-- The caller chose ${language.name}. Speak ${language.name} from the first sentence.
-- If the caller switches to English, Hindi or Kannada, switch with them and stay in that language.
+- The caller chooses the language at the start of the call. Until they choose, speak English.
+- If they name a language you were not offered by name (for example Tamil or Telugu), that is fine: use it.
+- As soon as they choose, call set_language, then ask about their internet problem in that language.
+- From then on speak ONLY the chosen language for the whole call, even if the caller mixes in words from other languages or answers in another language. Change language only if the caller clearly asks to switch; then call set_language again.
 - Keep common technical words in English the way people in India say them: router, modem, Wi-Fi, ONT, LOS, PON, light, cable, password, restart, speed test.
 - Use everyday words, not textbook language. For Kannada and Hindi, speak the natural spoken form, not formal written style.
 
@@ -85,7 +102,7 @@ You are ${assistantName}, the voice support assistant for ${ispName}, an Interne
 - When the caller has to wait (for a restart), say how long and tell them to say "done" when ready.
 
 # Opening
-${resumeContext ? 'This is a resumed call; see "Resumed call" below for how to open.' : `When the call connects you will receive a short note that the caller joined. Reply by saying: "${greeting}"`}
+${resumeContext ? 'This is a resumed call; see "Resumed call" below for how to open.' : `When the call connects you will receive a short note that the caller joined. Reply by saying: "${greeting}" Then wait for their choice.`}
 
 # Safety and privacy rules (always)
 - Never ask for or repeat passwords, OTPs, bank, card or Aadhaar details. If the caller starts reading a password, stop them politely.

@@ -146,3 +146,35 @@ export function makeIceQueue(pc) {
     }
   };
 }
+
+/**
+ * iPhone Safari only lets an <audio> element play call audio later if it actually started
+ * playing during the user's tap. Start it on a silent stream inside the tap, then swap in
+ * the real stream when the call connects (see playStream).
+ */
+export function unlockAudioElement(audioEl, ctx) {
+  try {
+    if (ctx && !(audioEl.srcObject instanceof MediaStream)) {
+      audioEl.srcObject = ctx.createMediaStreamDestination().stream;
+    }
+    audioEl.muted = false;
+    audioEl.volume = 1;
+    audioEl.play().catch(() => {});
+  } catch {}
+}
+
+/** Plays a remote call stream; if the browser still blocks it, the next tap anywhere starts it. */
+export function playStream(audioEl, stream, onBlocked) {
+  audioEl.srcObject = stream;
+  audioEl.muted = false;
+  audioEl.volume = 1;
+  const p = audioEl.play();
+  if (p) {
+    p.catch(() => {
+      onBlocked?.();
+      const resume = () => audioEl.play().catch(() => {});
+      document.addEventListener('pointerdown', resume, { once: true });
+      document.addEventListener('keydown', resume, { once: true });
+    });
+  }
+}

@@ -65,7 +65,11 @@ export class GeminiLive {
     this.closed = false;
     this.ready = false;
     this.lastVoiceAt = 0;
-    this.echoGuard = 0.06; // while the assistant talks, quiet sound (its own echo) is not sent
+    // While the assistant talks (and for a moment after), quieter sound is treated as its own
+    // echo from the speaker and replaced with silence. Speaking up close to the mic still gets through.
+    this.echoGuard = 0.09;
+    this.echoTailMs = 600;
+    this.lastPlaybackEnd = 0;
   }
 
   /** Call synchronously inside the user's tap so iOS allows audio. */
@@ -127,10 +131,13 @@ export class GeminiLive {
 
   onMic({ pcm, rms }) {
     if (!this.ready || this.closed) return;
-    if (rms > 0.02 && !this.playing) this.lastVoiceAt = performance.now();
+    const now = performance.now();
+    const echoWindow = this.playing || now - this.lastPlaybackEnd < this.echoTailMs;
+    if (rms > 0.02 && !echoWindow) this.lastVoiceAt = now;
     let data = pcm;
     // mute, or likely echo of the assistant's own voice: send silence so timing stays smooth
-    if (this.muted || (this.playing && rms < this.echoGuard)) data = new Int16Array(pcm.byteLength / 2).buffer;
+    if (this.muted || (echoWindow && rms < this.echoGuard)) data = new Int16Array(pcm.byteLength / 2).buffer;
+    this.onEvent('mic', { rms, sent: data === pcm });
     this.send({ realtimeInput: { audio: { data: toBase64(data), mimeType: 'audio/pcm;rate=16000' } } });
   }
 
@@ -158,7 +165,10 @@ export class GeminiLive {
     if (!wasPlaying) this.onEvent('speaking-started');
     src.onended = () => {
       this.sources.delete(src);
-      if (!this.playing) this.onEvent('speaking-stopped');
+      if (!this.playing) {
+        this.lastPlaybackEnd = performance.now();
+        this.onEvent('speaking-stopped');
+      }
     };
   }
 
@@ -169,6 +179,7 @@ export class GeminiLive {
     }
     const was = this.playing;
     this.sources.clear();
+    if (was) this.lastPlaybackEnd = performance.now();
     this.nextTime = 0;
     if (was) this.onEvent('speaking-stopped');
   }

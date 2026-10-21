@@ -1,7 +1,7 @@
 // Caller (visitor) page.
 // Flow: mic → Gemini Live over WebSocket (AI agent) → on escalation, close AI leg →
 //       WebRTC peer-to-peer to the technician's browser, signalled through our server.
-import { Signal, Tones, toast, setLed, addLine, fmtTime, MIC_CONSTRAINTS, makeIceQueue } from './common.js';
+import { Signal, Tones, toast, setLed, addLine, fmtTime, MIC_CONSTRAINTS, makeIceQueue, unlockAudioElement, playStream } from './common.js';
 import { GeminiLive } from './gemini-live.js';
 
 const $ = (s) => document.querySelector(s);
@@ -9,7 +9,7 @@ const $ = (s) => document.querySelector(s);
 const I18N = {
   en: {
     title: 'Internet not working?',
-    lede: 'Talk to {assistant}, our voice assistant. She walks you through quick fixes, or connects you to our technician.',
+    lede: 'Talk to {assistant}, our voice assistant, in English, Hindi, Kannada or your own language. She walks you through quick fixes, or connects you to our technician.',
     tapToCall: 'Tap to call', connecting: 'Connecting…', listening: 'Listening…', thinking: 'Thinking…',
     speaking: '{assistant} is speaking', waiting: 'Connecting you to a technician…', tech: 'Talking to {tech}',
     ended: 'Call ended. Tap to call again.', mute: 'Mute', unmute: 'Unmute', techBtn: 'Technician', end: 'End call',
@@ -21,42 +21,13 @@ const I18N = {
     techJoined: '{tech} joined the call.', latency: 'Average reply time',
     failed: 'Could not connect. Check your internet and tap call again.', timeLimit: 'Call time limit reached.',
     tapToHear: 'Tap anywhere to hear the call audio.', techLost: 'The connection to the technician dropped.'
-  },
-  hi: {
-    title: 'इंटरनेट नहीं चल रहा?',
-    lede: 'हमारी वॉइस असिस्टेंट {assistant} से बात करें। वो आसान उपाय बताएगी, या टेक्नीशियन से जोड़ देगी।',
-    tapToCall: 'कॉल करने के लिए दबाएँ', connecting: 'कनेक्ट हो रहा है…', listening: 'सुन रही है…', thinking: 'सोच रही है…',
-    speaking: '{assistant} बोल रही है', waiting: 'आपको टेक्नीशियन से जोड़ रहे हैं…', tech: '{tech} से बात हो रही है',
-    ended: 'कॉल खत्म हुई। फिर से कॉल करने के लिए दबाएँ।', mute: 'म्यूट', unmute: 'अनम्यूट', techBtn: 'टेक्नीशियन', end: 'कॉल खत्म करें',
-    conversation: 'बातचीत', empty: 'आपकी बातचीत यहाँ दिखेगी।',
-    micLed: 'माइक', aiLed: 'वॉइस असिस्टेंट', techLed: 'टेक्नीशियन', netLed: 'कनेक्शन',
-    micDenied: 'माइक की अनुमति नहीं मिली। ब्राउज़र सेटिंग में इस साइट के लिए माइक चालू करें और फिर से कॉल करें।',
-    noTech: 'अभी कोई टेक्नीशियन खाली नहीं है। {assistant} से बात जारी रखें, या बूथ के हेल्प डेस्क पर आएँ।',
-    missed: 'टेक्नीशियन ने कॉल नहीं उठाई। आपको वापस {assistant} से जोड़ रहे हैं।',
-    techJoined: '{tech} कॉल से जुड़ गए।', latency: 'औसत जवाब समय',
-    failed: 'कनेक्ट नहीं हो पाया। इंटरनेट जाँचें और फिर से कॉल करें।', timeLimit: 'कॉल का समय पूरा हुआ।',
-    tapToHear: 'आवाज़ सुनने के लिए स्क्रीन पर कहीं भी दबाएँ।', techLost: 'टेक्नीशियन से कनेक्शन टूट गया।'
-  },
-  kn: {
-    title: 'ಇಂಟರ್ನೆಟ್ ಕೆಲಸ ಮಾಡ್ತಿಲ್ವಾ?',
-    lede: 'ನಮ್ಮ ವಾಯ್ಸ್ ಅಸಿಸ್ಟೆಂಟ್ {assistant} ಜೊತೆ ಮಾತಾಡಿ. ಸುಲಭ ಪರಿಹಾರ ಹೇಳ್ತಾರೆ, ಬೇಕಾದರೆ ಟೆಕ್ನಿಷಿಯನ್‌ಗೆ ಕನೆಕ್ಟ್ ಮಾಡ್ತಾರೆ.',
-    tapToCall: 'ಕರೆ ಮಾಡಲು ಒತ್ತಿ', connecting: 'ಕನೆಕ್ಟ್ ಆಗ್ತಿದೆ…', listening: 'ಕೇಳುತ್ತಿದೆ…', thinking: 'ಯೋಚಿಸುತ್ತಿದೆ…',
-    speaking: '{assistant} ಮಾತಾಡ್ತಿದ್ದಾರೆ', waiting: 'ಟೆಕ್ನಿಷಿಯನ್‌ಗೆ ಕನೆಕ್ಟ್ ಮಾಡ್ತಿದ್ದೀವಿ…', tech: '{tech} ಜೊತೆ ಮಾತಾಡ್ತಿದ್ದೀರಿ',
-    ended: 'ಕರೆ ಮುಗಿಯಿತು. ಮತ್ತೆ ಕರೆ ಮಾಡಲು ಒತ್ತಿ.', mute: 'ಮ್ಯೂಟ್', unmute: 'ಅನ್‌ಮ್ಯೂಟ್', techBtn: 'ಟೆಕ್ನಿಷಿಯನ್', end: 'ಕರೆ ಮುಗಿಸಿ',
-    conversation: 'ಸಂಭಾಷಣೆ', empty: 'ನಿಮ್ಮ ಸಂಭಾಷಣೆ ಇಲ್ಲಿ ಕಾಣಿಸುತ್ತದೆ.',
-    micLed: 'ಮೈಕ್', aiLed: 'ವಾಯ್ಸ್ ಅಸಿಸ್ಟೆಂಟ್', techLed: 'ಟೆಕ್ನಿಷಿಯನ್', netLed: 'ಕನೆಕ್ಷನ್',
-    micDenied: 'ಮೈಕ್ ಅನುಮತಿ ಸಿಗಲಿಲ್ಲ. ಬ್ರೌಸರ್ ಸೆಟ್ಟಿಂಗ್ಸ್‌ನಲ್ಲಿ ಈ ಸೈಟ್‌ಗೆ ಮೈಕ್ ಅನುಮತಿಸಿ, ಮತ್ತೆ ಕರೆ ಮಾಡಿ.',
-    noTech: 'ಈಗ ಯಾವ ಟೆಕ್ನಿಷಿಯನ್ ಕೂಡ ಫ್ರೀ ಇಲ್ಲ. {assistant} ಜೊತೆ ಮುಂದುವರಿಸಿ, ಅಥವಾ ಬೂತ್‌ನ ಹೆಲ್ಪ್ ಡೆಸ್ಕ್‌ಗೆ ಬನ್ನಿ.',
-    missed: 'ಟೆಕ್ನಿಷಿಯನ್ ಕರೆ ತೆಗೆಯಲಿಲ್ಲ. ಮತ್ತೆ {assistant} ಜೊತೆ ಕನೆಕ್ಟ್ ಮಾಡ್ತಿದ್ದೀವಿ.',
-    techJoined: '{tech} ಕರೆಗೆ ಸೇರಿದರು.', latency: 'ಸರಾಸರಿ ಉತ್ತರ ಸಮಯ',
-    failed: 'ಕನೆಕ್ಟ್ ಆಗಲಿಲ್ಲ. ಇಂಟರ್ನೆಟ್ ಪರಿಶೀಲಿಸಿ, ಮತ್ತೆ ಕರೆ ಮಾಡಿ.', timeLimit: 'ಕರೆಯ ಸಮಯ ಮುಗಿಯಿತು.',
-    tapToHear: 'ಧ್ವನಿ ಕೇಳಲು ಸ್ಕ್ರೀನ್ ಮೇಲೆ ಎಲ್ಲಾದರೂ ಒತ್ತಿ.', techLost: 'ಟೆಕ್ನಿಷಿಯನ್ ಜೊತೆ ಕನೆಕ್ಷನ್ ಕಡಿತಗೊಂಡಿತು.'
   }
 };
 
 // ------------------------------------------------------------- state
-let config = { assistantName: 'Asha', ispName: 'NetConnect', maxCallSeconds: 600, iceServers: [] };
-let lang = 'en';
+let config = { assistantName: 'Nova', ispName: 'NetConnect', maxCallSeconds: 600, iceServers: [] };
+const lang = 'en'; // page text language; Nova asks the caller which language to speak
+let callerLanguage = ''; // chosen by the caller during the call (set_language)
 let phase = 'idle'; // idle | connecting | ai | waiting | tech-connecting | tech | ended
 let mic = null;
 let ai = null; // GeminiLive session
@@ -95,7 +66,6 @@ const t = (key, vars = {}) =>
 function applyLanguage() {
   document.documentElement.lang = lang;
   document.querySelectorAll('[data-i18n]').forEach((n) => (n.textContent = t(n.dataset.i18n)));
-  document.querySelectorAll('.lang button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === lang)));
   el.mute.querySelector('span').textContent = muted ? t('unmute') : t('mute');
   setLabel(currentLabelKey);
 }
@@ -119,7 +89,6 @@ function setPhase(p) {
   el.mute.disabled = !inCall;
   el.end.disabled = !inCall;
   el.techBtn.disabled = p !== 'ai';
-  document.querySelectorAll('.lang button').forEach((b) => (b.disabled = inCall));
 }
 
 function line(role, text) {
@@ -145,23 +114,17 @@ el.key.addEventListener('click', () => {
 el.end.addEventListener('click', () => endCall());
 el.mute.addEventListener('click', toggleMute);
 el.techBtn.addEventListener('click', () => manualEscalation());
-document.querySelectorAll('.lang button').forEach((b) =>
-  b.addEventListener('click', () => {
-    lang = b.dataset.lang;
-    try { localStorage.setItem('isp-lang', lang); } catch {}
-    applyLanguage();
-  })
-);
 
 async function startCall() {
   tones.unlock();
-  el.audio.play().catch(() => {}); // unlock autoplay inside the tap (iOS)
   if (!audioCtx) {
     const AC = window.AudioContext || window.webkitAudioContext;
     audioCtx = new AC({ latencyHint: 'interactive' });
   }
   audioCtx.resume?.(); // must happen inside the tap for iPhone Safari
+  unlockAudioElement(el.audio, audioCtx); // so the technician's voice can play later on iPhone
   transcript = [];
+  callerLanguage = '';
   latencies.length = 0;
   el.latency.hidden = true;
   el.transcript.querySelectorAll('.line:not(#emptyLine)').forEach((n) => n.remove());
@@ -241,11 +204,7 @@ function toggleMute() {
 }
 
 function playRemote(stream) {
-  el.audio.srcObject = stream;
-  el.audio.play().catch(() => {
-    toast(t('tapToHear'), 8000);
-    document.addEventListener('pointerdown', () => el.audio.play().catch(() => {}), { once: true });
-  });
+  playStream(el.audio, stream, () => toast(t('tapToHear'), 8000));
 }
 
 // ------------------------------------------------------------- AI leg (Gemini Live over WebSocket)
@@ -254,7 +213,7 @@ async function startAI(resumeCallId = null) {
   const r = await fetch('/api/session', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ lang, resumeCallId })
+    body: JSON.stringify({ resumeCallId })
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
@@ -269,7 +228,7 @@ async function startAI(resumeCallId = null) {
   await session.start({ wsUrl: data.wsUrl, setup: data.setup, micStream: mic });
   if (ai !== session) return session.close(); // call ended while connecting
 
-  // Gemini waits for input; this note makes Asha greet the caller first (see prompt.js "Opening")
+  // Gemini waits for input; this note makes Nova greet the caller first (see prompt.js "Opening")
   session.sendText(data.resumed ? 'The caller is back on the line.' : 'The caller has just joined the call.');
   turnEndedAt = performance.now();
 
@@ -386,7 +345,14 @@ async function handleToolCall(fc) {
   const args = fc.args || {};
   const reply = (response) => ai?.sendToolResponse([{ id: fc.id, name: fc.name, response }]);
 
-  if (fc.name === 'escalate_to_technician') {
+  if (fc.name === 'set_language') {
+    const chosen = String(args.language || '').trim().slice(0, 30);
+    if (chosen && chosen !== callerLanguage) {
+      callerLanguage = chosen;
+      line('system', `Language: ${chosen}`);
+    }
+    reply({ status: 'ok', language: chosen });
+  } else if (fc.name === 'escalate_to_technician') {
     setLed(el.ledTech, 'amber', true);
     finalizeUser();
     const res = await requestEscalation(args);
@@ -428,7 +394,7 @@ function requestEscalation(args) {
   return sig.request(
     {
       type: 'escalate',
-      lang,
+      lang: callerLanguage || 'Not chosen yet',
       reason: args.reason,
       summary: args.summary,
       stepsTried: args.steps_tried,
@@ -579,8 +545,6 @@ function stopTech() {
 
 // ------------------------------------------------------------- boot
 (async function boot() {
-  try { lang = localStorage.getItem('isp-lang') || 'en'; } catch {}
-  if (!I18N[lang]) lang = 'en';
   try {
     config = { ...config, ...(await (await fetch('/api/config')).json()) };
   } catch (e) {

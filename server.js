@@ -10,7 +10,7 @@ import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
-import { buildInstructions, FUNCTION_DECLARATIONS, LANGUAGES } from './prompt.js';
+import { buildInstructions, FUNCTION_DECLARATIONS, OFFERED_LANGUAGES } from './prompt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // Web pages live in public/. If they were uploaded next to server.js instead (easy to do with
@@ -34,7 +34,7 @@ const cfg = {
   model: process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live',
   voice: process.env.GEMINI_VOICE || 'Kore',
   ispName: process.env.ISP_NAME || 'NetConnect',
-  assistantName: process.env.ASSISTANT_NAME || 'Asha',
+  assistantName: process.env.ASSISTANT_NAME || 'Nova',
   techPin: process.env.TECH_PIN || '',
   maxCallSeconds: Number(process.env.MAX_CALL_SECONDS) || 600,
   ringTimeoutMs: (Number(process.env.RING_TIMEOUT_SECONDS) || 45) * 1000,
@@ -129,7 +129,7 @@ function publicConfig() {
     assistantName: cfg.assistantName,
     maxCallSeconds: cfg.maxCallSeconds,
     ringTimeoutSeconds: cfg.ringTimeoutMs / 1000,
-    languages: Object.fromEntries(Object.entries(LANGUAGES).map(([k, v]) => [k, v.name])),
+    languages: OFFERED_LANGUAGES,
     iceServers: iceServers(),
     aiReady: Boolean(cfg.geminiKey)
   };
@@ -154,7 +154,7 @@ const stats = { aiSessions: 0, escalations: 0, connectedToTech: 0, missed: 0, re
 
 // The exact setup message the browser sends as its first WebSocket frame to Gemini.
 // It is built here so the system prompt and tools stay under the server's control.
-function buildLiveSetup(lang, resumeContext) {
+function buildLiveSetup(resumeContext) {
   return {
     setup: {
       model: `models/${cfg.model}`,
@@ -163,7 +163,7 @@ function buildLiveSetup(lang, resumeContext) {
         speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: cfg.voice } } }
       },
       systemInstruction: {
-        parts: [{ text: buildInstructions({ lang, ispName: cfg.ispName, assistantName: cfg.assistantName, resumeContext }) }]
+        parts: [{ text: buildInstructions({ ispName: cfg.ispName, assistantName: cfg.assistantName, resumeContext }) }]
       },
       tools: [{ functionDeclarations: FUNCTION_DECLARATIONS }],
       // transcripts for the screen and for the technician (language is auto-detected)
@@ -189,7 +189,6 @@ async function createSession(req, res) {
   try { body = await readJson(req); } catch (e) { return json(res, e.status || 400, { error: 'Bad request' }); }
   if (!allowSession(clientIp(req))) return json(res, 429, { error: 'Too many calls from this device. Please try again later.' });
 
-  const lang = LANGUAGES[body?.lang] ? body.lang : 'en';
 
   // A resumed call (technician did not pick up) gets context from OUR records, never from the browser
   let resumeContext = '';
@@ -200,7 +199,10 @@ async function createSession(req, res) {
       `The caller was already helped earlier in this call. Summary: ${prev.summary}. ` +
       'You tried to transfer them to the technician but nobody answered in time. ' +
       `When you receive the note that the caller is back, apologise in one sentence, then offer two options: continue troubleshooting together, or visit the ${cfg.ispName} help desk at the booth. ` +
-      'Do not call escalate_to_technician again unless the caller insists.';
+      'Do not call escalate_to_technician again unless the caller insists.' +
+      (prev.lang && prev.lang !== 'Not chosen yet'
+        ? ` The caller already chose ${prev.lang}: speak only ${prev.lang} and do not ask for the language again.`
+        : ' Ask which language they would like before anything else.');
   }
 
   try {
@@ -218,16 +220,13 @@ async function createSession(req, res) {
         body: JSON.stringify(body)
       }).then(async (r) => ({ r, data: await r.json().catch(() => ({})) }));
 
-    // First try a token locked to the Live model (REST name: bidiGenerateContentSetup).
-    // If Google rejects that field, fall back to a plain one-use token: it still expires
-    // in 1 minute if unused and can start only one session.
-    let { r, data } = await requestToken({
-      ...base,
-      bidiGenerateContentSetup: {
-        model: `models/${cfg.model}`,
-        generationConfig: { responseModalities: ['AUDIO'] }
-      }
-    });
+    // The token carries the FULL setup (prompt, functions, voice, transcripts, turn detection).
+    // Important: a token with a setup inside makes Gemini use that setup and ignore the one the
+    // browser sends, so everything Nova needs must be in here, not only the model.
+    // If Google rejects the field, fall back to a plain one-use token; then the browser's
+    // setup message (identical) is used instead. Either way the session gets the same setup.
+    const setup = buildLiveSetup(resumeContext);
+    let { r, data } = await requestToken({ ...base, bidiGenerateContentSetup: setup.setup });
     if (r.status === 400) {
       console.warn('[gemini] locked token rejected, using a plain one-use token:', data?.error?.message);
       ({ r, data } = await requestToken(base));
@@ -240,7 +239,7 @@ async function createSession(req, res) {
     broadcastState();
     json(res, 200, {
       wsUrl: `${GEMINI_WS}?access_token=${encodeURIComponent(data.name)}`,
-      setup: buildLiveSetup(lang, resumeContext),
+      setup,
       resumed: Boolean(resumeContext),
       maxCallSeconds: cfg.maxCallSeconds
     });
@@ -436,7 +435,7 @@ function handle(ws, msg, req) {
         id: randomUUID(),
         callerWs: ws,
         status: 'ringing',
-        lang: LANGUAGES[msg.lang] ? msg.lang : 'en',
+        lang: clean(msg.lang, 30) || 'Not chosen yet',
         reason: clean(msg.reason, 60) || 'out_of_scope',
         summary: clean(msg.summary, 1500) || 'No summary provided.',
         stepsTried: Array.isArray(msg.stepsTried) ? msg.stepsTried.slice(0, 20).map((s) => clean(s, 200)) : [],

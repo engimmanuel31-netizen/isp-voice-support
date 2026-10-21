@@ -1,5 +1,5 @@
 // Technician console: rings on escalations, answers with one tap, receives the caller's WebRTC audio.
-import { Signal, Tones, toast, setLed, addLine, fmtTime, MIC_CONSTRAINTS, makeIceQueue } from './common.js';
+import { Signal, Tones, toast, setLed, addLine, fmtTime, MIC_CONSTRAINTS, makeIceQueue, unlockAudioElement, playStream } from './common.js';
 
 const $ = (s) => document.querySelector(s);
 
@@ -45,7 +45,7 @@ el.loginForm.addEventListener('submit', async (e) => {
   e.preventDefault();
   el.loginError.textContent = '';
   tones.unlock(); // inside the tap, so ringing works later (iOS)
-  el.audio.play().catch(() => {});
+  unlockAudioElement(el.audio, tones.ctx); // so the caller's voice can play later on iPhone
   me = { name: el.name.value.trim() || 'Technician', pin: el.pin.value };
   try { localStorage.setItem('tech-name', me.name); } catch {}
 
@@ -247,7 +247,7 @@ function notify(call) {
 function accept(callId) {
   if (active) return;
   tones.unlock();
-  el.audio.play().catch(() => {});
+  unlockAudioElement(el.audio, tones.ctx); // the Answer tap re-arms playback for this call
   if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
   sig.send({ type: 'accept', callId });
 }
@@ -277,8 +277,7 @@ async function beginCall(call) {
   }
 
   pc.ontrack = (e) => {
-    el.audio.srcObject = e.streams[0];
-    el.audio.play().catch(() => toast('Tap anywhere to hear the caller.'));
+    playStream(el.audio, e.streams[0], () => toast('Tap anywhere to hear the caller.', 8000));
   };
   pc.onicecandidate = (e) => {
     if (e.candidate) sig.send({ type: 'signal', callId: call.id, data: { candidate: e.candidate.toJSON() } });
@@ -368,6 +367,7 @@ function finishCall() {
   }
   active = null;
   el.audio.srcObject = null;
+  unlockAudioElement(el.audio, tones.ctx); // back to silence, still allowed to play next call
   mic?.getAudioTracks().forEach((t) => (t.enabled = false));
   el.liveCall.hidden = true;
   el.liveEmpty.hidden = false;
