@@ -175,9 +175,10 @@ function buildLiveSetup(resumeContext) {
           startOfSpeechSensitivity: 'START_SENSITIVITY_LOW', // exhibition halls are noisy
           endOfSpeechSensitivity: 'END_SENSITIVITY_HIGH', // reply quickly once the caller stops
           prefixPaddingMs: 200,
-          silenceDurationMs: 500
+          silenceDurationMs: 800 // a short pause mid-sentence doesn't end the caller's turn
         },
-        activityHandling: 'START_OF_ACTIVITY_INTERRUPTS'
+        // background noise must not cut Nova off mid-sentence at a busy exhibition
+        activityHandling: 'NO_INTERRUPTION'
       }
     }
   };

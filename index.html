@@ -29,6 +29,7 @@
         </svg>
       </button>
       <div class="key-label" id="keyLabel" data-i18n="tapToCall">Tap to call</div>
+      <p class="mic-off" id="micOffNote" role="status" hidden>Microphone off. Nova can’t hear you.</p>
 
       <div class="controls">
         <button class="btn" id="muteBtn" type="button" aria-pressed="false" disabled>
@@ -44,6 +45,8 @@
           <span data-i18n="end">End call</span>
         </button>
       </div>
+
+      <label class="switch hold-switch"><input type="checkbox" id="holdToggle"> <span data-i18n="holdSwitch">Noisy room: hold the big button while you talk</span></label>
 
       <div class="leds">
         <span class="led" id="ledMic" data-c="off" data-i18n="micLed">Microphone</span>

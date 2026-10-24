@@ -20,7 +20,10 @@ const I18N = {
     missed: 'The technician could not answer. Taking you back to {assistant}.',
     techJoined: '{tech} joined the call.', latency: 'Average reply time',
     failed: 'Could not connect. Check your internet and tap call again.', timeLimit: 'Call time limit reached.',
-    tapToHear: 'Tap anywhere to hear the call audio.', techLost: 'The connection to the technician dropped.'
+    tapToHear: 'Tap anywhere to hear the call audio.', techLost: 'The connection to the technician dropped.',
+    micOff: 'Microphone off. {assistant} can’t hear you.', micOffTech: 'Microphone off. The technician can’t hear you.',
+    holdSwitch: 'Noisy room: hold the big button while you talk',
+    holdToTalk: 'Hold the button and talk', holdTalking: 'Listening… let go when you finish'
   }
 };
 
@@ -39,6 +42,9 @@ let callStart = 0;
 let clock = null;
 let limitTimer = null;
 let muted = false;
+let holdMode = false; // hold-to-talk for very noisy rooms
+let holding = false;
+try { holdMode = localStorage.getItem('isp-hold') === '1'; } catch {}
 
 // AI turn tracking
 let audioCtx = null; // created inside the call tap, reused for every AI session in the call
@@ -53,7 +59,8 @@ let hangingUp = false;
 const el = {
   key: $('#key'), keyLabel: $('#keyLabel'), mute: $('#muteBtn'), techBtn: $('#techBtn'), end: $('#endBtn'),
   ledMic: $('#ledMic'), ledAi: $('#ledAi'), ledTech: $('#ledTech'), ledNet: $('#ledNet'), ledTime: $('#ledTime'),
-  transcript: $('#transcript'), empty: $('#emptyLine'), audio: $('#remote'), latency: $('#latency'), latencyVal: $('#latencyVal')
+  transcript: $('#transcript'), empty: $('#emptyLine'), audio: $('#remote'), latency: $('#latency'), latencyVal: $('#latencyVal'),
+  micOff: $('#micOffNote'), hold: $('#holdToggle')
 };
 
 const tones = new Tones();
@@ -72,6 +79,8 @@ function applyLanguage() {
 
 let currentLabelKey = 'tapToCall';
 function setLabel(key) {
+  // in hold-to-talk mode, "Listening…" becomes the instruction to hold the button
+  if (key === 'listening' && holdMode && phase === 'ai' && !holding) key = 'holdToTalk';
   currentLabelKey = key;
   el.keyLabel.textContent = t(key);
 }
@@ -89,6 +98,7 @@ function setPhase(p) {
   el.mute.disabled = !inCall;
   el.end.disabled = !inCall;
   el.techBtn.disabled = p !== 'ai';
+  showMicOff();
 }
 
 function line(role, text) {
@@ -109,7 +119,47 @@ const sig = new Signal({
 // ------------------------------------------------------------- start / end
 el.key.addEventListener('click', () => {
   if (phase === 'idle' || phase === 'ended') startCall();
+  else if (holdMode && phase === 'ai') return; // in hold-to-talk the big button is the talk button
   else endCall();
+});
+
+// hold-to-talk: press and hold the big button while speaking
+function startHold(e) {
+  if (!holdMode || phase !== 'ai' || !ai) return;
+  e?.preventDefault?.();
+  if (e?.pointerId !== undefined) { try { el.key.setPointerCapture(e.pointerId); } catch {} }
+  holding = true;
+  ai.holding = true;
+  el.key.dataset.holding = '';
+  setLabel('holdTalking');
+}
+function endHold() {
+  if (!holding) return;
+  holding = false;
+  if (ai) ai.holding = false;
+  delete el.key.dataset.holding;
+  if (phase === 'ai') setLabel(ai?.playing ? 'speaking' : 'thinking');
+  // nothing came back (e.g. only noise was heard): show the hold instruction again
+  setTimeout(() => {
+    if (!holding && phase === 'ai' && !ai?.playing && currentLabelKey === 'thinking') setLabel('listening');
+  }, 4000);
+}
+el.key.addEventListener('pointerdown', startHold);
+el.key.addEventListener('pointerup', endHold);
+el.key.addEventListener('pointercancel', endHold);
+el.key.addEventListener('lostpointercapture', endHold);
+el.key.addEventListener('contextmenu', (e) => { if (holdMode && phase === 'ai') e.preventDefault(); });
+el.key.addEventListener('keydown', (e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat && holdMode && phase === 'ai') startHold(e); });
+el.key.addEventListener('keyup', (e) => { if (e.key === ' ' || e.key === 'Enter') endHold(); });
+
+el.hold.checked = holdMode;
+el.hold.addEventListener('change', () => {
+  holdMode = el.hold.checked;
+  try { localStorage.setItem('isp-hold', holdMode ? '1' : '0'); } catch {}
+  if (ai) { ai.holdToTalk = holdMode; ai.holding = false; }
+  holding = false;
+  delete el.key.dataset.holding;
+  if (phase === 'ai') setKey(ai?.playing ? 'speaking' : 'listening', ai?.playing ? 'speaking' : 'listening');
 });
 el.end.addEventListener('click', () => endCall());
 el.mute.addEventListener('click', toggleMute);
@@ -131,6 +181,9 @@ async function startCall() {
   el.empty.hidden = false;
   callId = null;
   muted = false;
+  holding = false;
+  el.mute.setAttribute('aria-pressed', 'false');
+  mic?.getAudioTracks().forEach((tr) => (tr.enabled = true));
   applyLanguage();
 
   setPhase('connecting');
@@ -201,6 +254,12 @@ function toggleMute() {
   el.mute.setAttribute('aria-pressed', String(muted));
   el.mute.querySelector('span').textContent = muted ? t('unmute') : t('mute');
   setLed(el.ledMic, muted ? 'red' : 'green');
+  showMicOff();
+}
+
+function showMicOff() {
+  el.micOff.hidden = !muted || ['idle', 'ended'].includes(phase);
+  el.micOff.textContent = ['tech', 'tech-connecting', 'waiting'].includes(phase) ? t('micOffTech') : t('micOff');
 }
 
 function playRemote(stream) {
@@ -225,6 +284,7 @@ async function startAI(resumeCallId = null) {
   const session = new GeminiLive(onAIEvent, audioCtx);
   ai = session;
   session.muted = muted;
+  session.holdToTalk = holdMode;
   await session.start({ wsUrl: data.wsUrl, setup: data.setup, micStream: mic });
   if (ai !== session) return session.close(); // call ended while connecting
 

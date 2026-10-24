@@ -68,7 +68,10 @@ export class GeminiLive {
     // While the assistant talks (and for a moment after), quieter sound is treated as its own
     // echo from the speaker and replaced with silence. Speaking up close to the mic still gets through.
     this.echoGuard = 0.09;
-    this.echoTailMs = 600;
+    this.echoTailMs = 400;
+    this.noInterrupt = true; // noise can't stop Nova mid-sentence (exhibition default)
+    this.holdToTalk = false; // caller holds the big button while speaking (very noisy rooms)
+    this.holding = false;
     this.lastPlaybackEnd = 0;
   }
 
@@ -133,11 +136,18 @@ export class GeminiLive {
     if (!this.ready || this.closed) return;
     const now = performance.now();
     const echoWindow = this.playing || now - this.lastPlaybackEnd < this.echoTailMs;
-    if (rms > 0.02 && !echoWindow) this.lastVoiceAt = now;
-    let data = pcm;
-    // mute, or likely echo of the assistant's own voice: send silence so timing stays smooth
-    if (this.muted || (echoWindow && rms < this.echoGuard)) data = new Int16Array(pcm.byteLength / 2).buffer;
-    this.onEvent('mic', { rms, sent: data === pcm });
+    // What is NOT sent to Nova (silence goes instead, so timing stays smooth):
+    // - muted
+    // - hold-to-talk mode and the caller is not holding the button
+    // - while Nova is speaking (and a moment after): in a noisy hall, crowd noise and her own
+    //   voice from the speaker would otherwise cut her off mid-sentence
+    const blocked =
+      this.muted ||
+      (this.holdToTalk && !this.holding) ||
+      (echoWindow && (this.noInterrupt || rms < this.echoGuard));
+    const data = blocked ? new Int16Array(pcm.byteLength / 2).buffer : pcm;
+    if (!blocked && rms > 0.02) this.lastVoiceAt = now;
+    this.onEvent('mic', { rms, sent: !blocked });
     this.send({ realtimeInput: { audio: { data: toBase64(data), mimeType: 'audio/pcm;rate=16000' } } });
   }
 
